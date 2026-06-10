@@ -149,25 +149,29 @@ Un device sans heartbeat depuis `2 × heartbeat_interval` est marqué `offline`.
 
 ## 4. Tools MCP disponibles
 
+L'orchestrateur n'a **aucune connaissance hardcodée** des capabilities. Les
+3 tools ci-dessous sont les seuls exposés à Hermes :
+
 | Tool | Description |
 |---|---|
 | `device_list()` | Liste les devices online et leurs capabilities activées |
-| `device_info(device_name)` | Détails complets d'un device |
-| `send_sms(numero, message, device_name?)` | Envoie un SMS depuis un mobile |
-| `make_call(numero, device_name?)` | Lance un appel téléphonique |
-| `get_location(device_name?)` | Récupère la position GPS |
-| `screenshot(device_name?)` | Capture d'écran |
-| `open_file(path, device_name?)` | Ouvre un fichier |
-| `run_terminal(command, device_name?)` | Exécute une commande terminal (confirmation requise) |
-| `launch_app(app_name, device_name?)` | Lance une application |
-| `get_battery(device_name?)` | Niveau de batterie |
-| `set_volume(level, device_name?)` | Règle le volume (0-100) |
-| `send_notification(title, message, device_name?)` | Notification push |
-| `set_capability(device_name, capability, enabled, auth_required?)` | Active/désactive une capability |
+| `device_info(device_name)` | Détails complets d'un device (registry, capabilities, statut) |
+| `exec_action(action, params, device_name?)` | Exécute n'importe quelle action sur un device |
+
+**Principe** : le device déclare ses propres capabilities à l'enregistrement.
+L'orchestrateur les stocke et les route dynamiquement via `exec_action`.
 
 Si `device_name` n'est pas précisé, l'orchestrateur choisit automatiquement
 l'unique device online disposant de la capability demandée. S'il y en a
 plusieurs, il demande de préciser.
+
+### Exemples d'appels `exec_action`
+
+- `exec_action("send_sms", {"numero": "0612345678", "message": "hello"}, "phone")`
+- `exec_action("record_audio", {"duration": 10}, "phone")`
+- `exec_action("open_file", {"path": "/home/user/doc.pdf"}, "desk")`
+- `exec_action("get_battery", {}, "phone")`
+- `exec_action("set_volume", {"level": 50}, "desk")`
 
 ---
 
@@ -239,9 +243,9 @@ Tous nécessitent `Authorization: Bearer ${ORCHESTRATOR_ADMIN_KEY}`.
    nouveau type, ex. `tablet_agent`).
 2. Implémenter côté agent : `/register`, `/heartbeat`, boucle `GET /commands`
    + `POST /results` (+ `/confirm` si des capabilities `auth_required`).
-3. Définir les `capabilities` pertinentes pour ce type d'appareil (un sous-
-   ensemble de la liste standard, ou de nouvelles actions — dans ce cas,
-   ajouter le tool MCP correspondant dans `mcp_server.py`).
+3. Définir les `capabilities` pertinentes pour ce type d'appareil. Aucune
+   modification de l'orchestrateur n'est nécessaire — les actions inconnues
+   sont routées automatiquement via `exec_action`.
 4. Enregistrer le device : il apparaîtra automatiquement dans
    `device_list()` et sera routable par nom ou par capability.
 

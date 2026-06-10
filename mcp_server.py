@@ -1,27 +1,18 @@
 """
-Serveur MCP exposé à Hermes.
+Serveur MCP exposé à Hermes — zéro connaissance hardcodée des capabilities.
 
-Ce serveur tourne en stdio (lancé directement par Hermes comme sous-processus)
-et communique avec l'orchestrateur FastAPI via son API REST interne, en
-utilisant ORCHESTRATOR_ADMIN_KEY. Il réutilise directement les modules
-`registry` et `queue` car il est conçu pour tourner sur la même machine,
-mais passe par la couche métier en mémoire partagée si lancé in-process,
-ou recrée une commande via la queue locale si lancé séparément.
+Contrairement à un serveur MCP classique qui expose des tools fixes,
+celui-ci n'expose qu'un seul tool d'exécution : `exec_action`.
 
-Pour simplifier le déploiement (un seul process orchestrateur = une seule
-queue en mémoire), ce serveur MCP importe directement `registry` et
-`queue` et accède à la même base SQLite. La file de commandes en mémoire
-(`command_queue`) doit donc être partagée : on lance ce script comme
-sous-processus de l'orchestrateur principal n'est PAS supporté pour la queue
-en mémoire séparée -> voir README pour le mode recommandé (MCP intégré dans
-le même process via le endpoint HTTP /mcp, ou stdio avec queue partagée par
-fichier).
+Les devices déclarent leurs propres capabilities à l'enregistrement.
+L'orchestrateur les stocke dans la registry SQLite et les route
+dynamiquement. Hermes découvre les capabilities disponibles via
+`device_list()` et appelle `exec_action(action, params, device_name?)`
+pour exécuter n'importe quelle action sur n'importe quel device.
 
-Implémentation retenue : stdio + accès direct à la registry SQLite (lecture
-des devices) et création des commandes via un appel HTTP interne vers
-l'orchestrateur (POST /internal/commands), qui partage la queue en mémoire
-du process principal. Cela garantit une seule source de vérité pour les
-commandes en attente.
+Le serveur tourne en stdio (lancé par Hermes comme sous-processus) et
+communique avec l'API FastAPI via les endpoints /internal/* pour créer
+les commandes et attendre les résultats.
 """
 
 from __future__ import annotations
@@ -34,7 +25,7 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 
 import config
-from models import CapabilityFlag, CommandStatus, DeviceStatus, DeviceType
+from models import DeviceStatus
 from registry import registry
 
 logging.basicConfig(
@@ -210,146 +201,29 @@ async def device_info(device_name: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def send_sms(numero: str, message: str, device_name: Optional[str] = None) -> dict[str, Any]:
-    """Envoie un SMS depuis un device mobile (capability send_sms)."""
-    return await route_command(
-        action="send_sms",
-        params={"numero": numero, "message": message},
-        device_name=device_name,
-        capability="send_sms",
-    )
-
-
-@mcp.tool()
-async def make_call(numero: str, device_name: Optional[str] = None) -> dict[str, Any]:
-    """Lance un appel téléphonique depuis un device mobile (capability make_call)."""
-    return await route_command(
-        action="make_call",
-        params={"numero": numero},
-        device_name=device_name,
-        capability="make_call",
-    )
-
-
-@mcp.tool()
-async def get_location(device_name: Optional[str] = None) -> dict[str, Any]:
-    """Récupère la position GPS d'un device (capability get_location)."""
-    return await route_command(
-        action="get_location",
-        params={},
-        device_name=device_name,
-        capability="get_location",
-    )
-
-
-@mcp.tool()
-async def screenshot(device_name: Optional[str] = None) -> dict[str, Any]:
-    """Prend une capture d'écran d'un device (capability screenshot)."""
-    return await route_command(
-        action="screenshot",
-        params={},
-        device_name=device_name,
-        capability="screenshot",
-    )
-
-
-@mcp.tool()
-async def open_file(path: str, device_name: Optional[str] = None) -> dict[str, Any]:
-    """Ouvre un fichier sur un device (capability open_file)."""
-    return await route_command(
-        action="open_file",
-        params={"path": path},
-        device_name=device_name,
-        capability="open_file",
-    )
-
-
-@mcp.tool()
-async def run_terminal(command: str, device_name: Optional[str] = None) -> dict[str, Any]:
-    """Exécute une commande dans un terminal sur un device (capability run_terminal,
-    nécessite généralement une confirmation utilisateur)."""
-    return await route_command(
-        action="run_terminal",
-        params={"command": command},
-        device_name=device_name,
-        capability="run_terminal",
-    )
-
-
-@mcp.tool()
-async def launch_app(app_name: str, device_name: Optional[str] = None) -> dict[str, Any]:
-    """Lance une application sur un device (capability launch_app)."""
-    return await route_command(
-        action="launch_app",
-        params={"app_name": app_name},
-        device_name=device_name,
-        capability="launch_app",
-    )
-
-
-@mcp.tool()
-async def get_battery(device_name: Optional[str] = None) -> dict[str, Any]:
-    """Récupère le niveau de batterie d'un device (capability get_battery)."""
-    return await route_command(
-        action="get_battery",
-        params={},
-        device_name=device_name,
-        capability="get_battery",
-    )
-
-
-@mcp.tool()
-async def set_volume(level: int, device_name: Optional[str] = None) -> dict[str, Any]:
-    """Règle le volume d'un device entre 0 et 100 (capability set_volume)."""
-    if not 0 <= level <= 100:
-        return {"error": "level doit être compris entre 0 et 100"}
-    return await route_command(
-        action="set_volume",
-        params={"level": level},
-        device_name=device_name,
-        capability="set_volume",
-    )
-
-
-@mcp.tool()
-async def send_notification(
-    title: str, message: str, device_name: Optional[str] = None
+async def exec_action(
+    action: str, params: dict[str, Any], device_name: Optional[str] = None
 ) -> dict[str, Any]:
-    """Envoie une notification push sur un device (capability send_notification)."""
-    return await route_command(
-        action="send_notification",
-        params={"title": title, "message": message},
-        device_name=device_name,
-        capability="send_notification",
-    )
+    """Execute any action on a device (generic tool).
 
+    This is the only execution tool in the orchestrator. The device
+    declares its own capabilities at registration time — this tool
+    routes any action to the right device dynamically.
 
-@mcp.tool()
-async def set_capability(
-    device_name: str, capability: str, enabled: bool, auth_required: bool = False
-) -> dict[str, Any]:
-    """Active, désactive ou modifie une capability sur un device.
+    Use device_list() to discover available devices and their
+    declared capabilities.
 
-    Exemples :
-    - set_capability("desk", "run_terminal", True, auth_required=True)
-    - set_capability("phone", "get_location", False)
+    Examples:
+    - exec_action("send_sms", {"numero": "0612345678", "message": "hello"}, "phone")
+    - exec_action("record_audio", {"duration": 10}, "phone")
+    - exec_action("open_file", {"path": "/home/user/doc.pdf"}, "desk")
     """
-    device = await registry.get_by_name(device_name)
-    if device is None:
-        return {"error": f"Device '{device_name}' introuvable"}
-
-    flag = CapabilityFlag(enabled=enabled, auth_required=auth_required)
-    try:
-        updated = await registry.set_single_capability(device.device_hash, capability, flag)
-    except ValueError:
-        return {"error": f"Device '{device_name}' introuvable"}
-
-    return {
-        "status": "ok",
-        "device_name": updated.device_name,
-        "capability": capability,
-        "value": updated.capabilities[capability].model_dump(),
-    }
+    return await route_command(
+        action=action,
+        params=params,
+        device_name=device_name,
+        capability=action,
+    )
 
 
 if __name__ == "__main__":
