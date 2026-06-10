@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+aiosqlite
+mcp
+pydantic
+python-multipart
+python-dotenv
+httpx
