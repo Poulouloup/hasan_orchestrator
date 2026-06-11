@@ -226,5 +226,29 @@ async def exec_action(
     )
 
 
+@mcp.tool()
+async def get_command_result(command_id: str) -> dict[str, Any]:
+    """Récupère le résultat d'une commande (auth_required notamment).
+
+    Les actions avec auth_required=True (ex: get_location, send_sms)
+    retournent un command_id via exec_action sans le résultat final.
+    Utilise ce tool pour récupérer le résultat une fois que l'utilisateur
+    a confirmé sur son téléphone.
+
+    Retourne le résultat complet (lat/lng pour location, status pour SMS, etc.)
+    ou {"error": "..."} si la commande n'existe plus (TTL expiré).
+    """
+    resp = await _internal_request("GET", f"/api/commands/{command_id}")
+    if resp.status_code != 200:
+        return {"error": f"Commande '{command_id}' introuvable ou expirée"}
+    data = resp.json()
+    return {
+        "command_id": data["command_id"],
+        "status": data["status"],
+        "result": data.get("result"),
+        "error": (data.get("result") or {}).get("error"),
+    }
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")
